@@ -1,0 +1,336 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r header, results='asis', echo=FALSE}
+Pmisc::markdownHeader(
+  title= "COVID-19 Death Counts Prediction in Italy and Hubei",
+  author= "Timothy Lee, credits to Prof Patrick Brown and Liza Bolton (University of Toronto) for starter code",
+  geometry='margin=1in',
+  fontsize=12,
+  css = system.file("src/webpage.css", package='Pmisc'),
+  classoption=c(
+    aspectratio=169,
+    xcolor='dvipsnames'),
+  biblatexoptions = c(
+    maxbibnames=20,
+    maxcitenames=2,doi='true', isbn='false', url='true'),
+  mathCommands=TRUE
+)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, tidy=FALSE, tidy.opts=list(width.cutoff=60), res=200)
+knitr::knit_hooks$set(
+    marginsp = function(before, options, envir){  
+      if(!before) return()
+# use small margins       
+      par(mar=c(1.5+0.9*options$marginsp,
+              1.5+0.9*options$marginsp,0.2,0.2),
+          mgp=c(1.45, 0.45, 0),cex=1)
+    }   
+)
+
+knitr::opts_chunk$set(
+  fig.height=6, fig.width=6, marginsp=TRUE, out.width=Pmisc::out.width(0.9))
+
+# if(any(commandArgs()=='mdToTex')) {
+# if you'll be converting md to tex, can use the following
+  knitr::knit_hooks$set(plot=knitr::hook_plot_tex)
+  knitr::opts_chunk$set(
+    dev='pdf', fig.align='center')
+  mdToTex = TRUE
+# } else {
+#   knitr::knit_hooks$set(plot=Pmisc::hook_plot_mdsubfig)
+#   knitr::opts_chunk$set(dev='png')
+#   mdToTex = FALSE
+# }
+knitr::opts_chunk$set(out.width= Pmisc::out.width(0.2))
+```
+
+
+# Context
+This data analysis report aims to predict the number of COVID-19 related deaths for Hubei and Italy using GAMM. 
+
+
+```{r, message=FALSE}
+library(devtools)
+library(mgcv)
+library(gamm4)
+library(tidyverse)
+```
+## Preliminary Analysis
+
+# nCOVID-19 data
+Plot deaths from nCOVID-19 
+```{r}
+# Load nCOVID-19 data
+covid_data <- read_csv("covid_data.csv")
+```
+
+# Plot over time
+```{r, out.width= Pmisc::out.width(0.9), fig.height=6, fig.width=6}
+covid_data %>% 
+  filter(country_region %in% c('Hubei','Italy','Iran','South Korea','USA')) %>% 
+  na.omit() %>% 
+  ggplot(aes(time, dead, color=country_region)) +
+  geom_point() +
+  theme_minimal()
+  # height <- 7
+```
+
+# Plot from initial death in region
+```{r, out.width= Pmisc::out.width(0.9), fig.height=6, fig.width=6}
+covid_data %>% 
+  filter(country_region %in% c('Hubei','Italy','Iran','South Korea','USA')) %>% 
+  na.omit() %>% 
+  ggplot(aes(timeInt, dead, color=country_region)) +
+  geom_point() +
+  theme_minimal()
+```
+
+Fit a GAM with `dead` as the response a smooth on `timeInt` and `country_region` as covariate. In the smooth, use `pc=0`, which indicates a *point constraint*. The smooth will pass through 0 at this point. `timeInt` indicates time since the first death, so the line should predict no deaths before any deaths occured.
+
+```{r}
+resGam= mgcv::gam(
+  dead ~ s(timeInt, pc=0) + country_region, 
+  data=covid_data, 
+  family=poisson(link='log'))
+```
+
+Summary Tables
+```{r,out.width="100%"}
+summary(resGam)
+coef(resGam)
+plot(resGam)
+```
+
+Fit and plot two more GAMs with the same model but with `k = 50` and `k = 20`. Run `gam.check()` for both. Since a higher `k` could lead to overfitting.
+```{r,out.width="100%"}
+resGam3= mgcv::gam(
+  dead ~ s(timeInt, k=50, pc=0) + country_region, data=covid_data, 
+  family=poisson(link='log'), method='ML')
+plot(resGam3)
+gam.check(resGam3)
+
+resGam4 = mgcv::gam(
+  dead ~ s(timeInt, k=20, pc=0) + country_region, data=covid_data, 
+  family=poisson(link='log'), method='ML')
+plot(resGam4)
+gam.check(resGam4)
+```
+
+Create a new variable in dataset called `timeIntInd`, which is is just a copy of `timeInt`. Use `gamm4()` to fit the same model as before but additionally with `country_region` nested within `timeIntInd` (since data within countries is likely to highly correlated, so we need to fit a random effect for country).
+
+```{r, cache=TRUE,out.width= Pmisc::out.width(0.9), fig.height=5, fig.width=5}
+covid_data$timeIntInd = covid_data$timeInt
+resGammInd = gamm4::gamm4(
+  dead ~ country_region + 
+      s(timeInt, k=20, pc=0),
+	random = ~ (1|timeIntInd), 
+	data=covid_data, family=poisson(link='log'))
+#extract mer and gam
+plot(resGammInd$gam)
+summary(resGammInd$mer)
+summary(resGammInd$gam)
+```
+
+```{r,out.width="100%"}
+covid_data_2 <- expand_grid(covid_data$timeInt, covid_data$country_region) %>% 
+  as_tibble() %>% 
+  rename(timeInt = 1, country_region = 2) %>% 
+  distinct() 
+  
+covid_data_2$predicted <- predict(resGammInd$gam, newdata=covid_data_2, type="response")
+
+#covid_data_3 <- bind_cols(covid_data_2, predicted) %>% 
+  #mutate(lower = fit - 2*se.fit, upper = fit + 2*se.fit)
+
+covid_data_2 %>% 
+  ggplot(aes(timeInt, predicted, colour=country_region)) +
+  geom_line() +
+  theme_minimal() +
+  facet_wrap(~country_region) +
+  ggtitle("Predicted deaths over time (time = 0 is first death)")
+```
+
+
+Fit this model with a random slope for time.
+```{r, cache=TRUE, out.width="100%"}
+covid_data$timeSlope = covid_data$timeInt/100
+
+resGammSlope = gamm4::gamm4(
+  dead ~ country_region + s(timeInt, k=30, pc=0),
+	random = ~(0+timeSlope|country_region) + 
+    (1|timeIntInd:country_region), 
+  data=covid_data, family=poisson(link='log'))
+#save(resGammSlope, file='resGamSlope.RData')
+plot(resGammSlope$gam)
+summary(resGammSlope$mer)
+names(lme4::ranef(resGammSlope$mer))
+theRanef = lme4::ranef(resGammSlope$mer, condVar = TRUE)$country_region
+(theRanefVec = sort(drop(t(theRanef))))
+
+Dcountry = 'France'
+toPredict = expand.grid(
+  timeInt = 0:100, 
+  country_region = Dcountry)
+toPredict$timeSlope = toPredict$timeIntInd = 
+  toPredict$timeInt
+thePred = predict(resGammSlope$gam, 
+                  newdata=toPredict, se.fit=TRUE)
+
+matplot(toPredict$timeInt, 
+        exp(do.call(cbind, thePred) %*% Pmisc::ciMat(0.75)), 
+        type='l',
+        col=c('black','grey','grey'), 
+        ylim = c(0, 25))
+points(covid_data[covid_data$country_region == Dcountry,c('timeInt','dead')], 
+       col='red')
+```
+
+
+
+
+# In-depth analysis for Italy and Hubei
+```{r cData, warning=FALSE}
+if(!requireNamespace("nCov2019")) {
+	devtools::install_github("GuangchuangYu/nCov2019")
+}
+x1 <- nCov2019::load_nCov2019(lang = 'en')
+hubei = x1$province[which(x1$province$province == 'Hubei'), ]
+hubei$deaths = c(0, diff(hubei$cum_dead))
+italy = x1$global[which(x1$global$country == 'Italy'), ]
+italy$deaths = c(0, diff(italy$cum_dead))
+x = list(Hubei= hubei, Italy=italy)
+```
+
+```{r cPlot, fig.cap='Covid 19 deaths', fig.subcap = names(x), fig.ncol=2, out.width=Pmisc::out.width(0.45)}
+for(D in names(x)) {
+	plot(x[[D]][,c('time','deaths')], xlim = as.Date(c('2020/1/10', '2020/4/1')))
+}
+```
+
+```{r dataForGammCovid}
+x$Hubei$weekday = format(x$Hubei$time, '%a')
+x$Italy$weekday = format(x$Italy$time, '%a')
+x$Italy$timeInt = as.numeric(x$Italy$time)
+x$Hubei$timeInt = as.numeric(x$Hubei$time)
+x$Italy$timeIid = x$Italy$timeInt
+x$Hubei$timeIid = x$Hubei$time
+```
+
+```{r covidGam, cache=FALSE, dev=NULL, fig.align=NULL, out.width=NULL, tidy=FALSE}
+gamItaly = gamm4::gamm4(deaths ~ weekday + s(timeInt, k=40), random = ~(1|timeIid),
+	data=x$Italy, family=poisson(link='log'))
+gamHubei = gamm4::gamm4(deaths ~ weekday + s(timeInt, k=100), random = ~(1|timeIid),
+	data=x$Hubei, family=poisson(link='log'), REML=False)
+```
+
+# Model for gamItaly
+$$
+\begin{aligned}
+Y_{t} &\sim Poisson(\lambda_{t}) \\
+log(\lambda_{t}) &= X_{t}\beta + f(t; \upsilon_1) + Z_t \\
+Z_t &\sim N(0, \sigma_2^2)
+\end{aligned}
+$$
+, for time $t$ in Italy.
+
+We use Poisson regression, where our response (number of deaths in time $t$) is linked to a linear combination of $weekday$ covariates,  $X_{t}$ and an overdispersion term with a log link.
+
+$X_{t}$ are our $weekday$ covariates (Monday, Tuesday, ..., Sunday with Friday as our intercept), $f(t)$ is a smoothly-varying function of $timeInt$ for time $t$ with $40$ knots and $\upsilon_1$ is its roughness parameter.
+
+$Z_{t}$ is the overdispersion or the independent random effect (random intercept) for each time $t$ ($timeIid$).
+
+# Model for gamHubei
+
+$$
+\begin{aligned}
+Y_{t} &\sim Poisson(\lambda_{t}) \\
+log(\lambda_{t}) &= X_{t}\beta + f(t; \upsilon_2) + Z_t \\
+Z_t &\sim N(0, \sigma^2_1)
+\end{aligned}
+$$
+, for time $t$ in Hubei.
+
+We use Poisson regression, where our response (number of deaths in time $t$) is linked to a linear combination of covariates of $weekday$ covariates,  $X_{t}$ and an overdispersion term with a log link.
+
+$X_{t}$ are our $weekday$ covariates (Monday, Tuesday, ..., Sunday with Friday as our intercept), $f(t)$ is a smoothly-varying function of $timeInt$ for time $t$ with $100$ knots and $\upsilon_1$ is its roughness parameter.
+
+$Z_{t}$ is the overdispersion or the independent random effect (random intercept) for each time $t$ ($timeIid$).
+
+```{r covidGamTable}
+lme4::VarCorr(gamItaly$mer)
+lme4::VarCorr(gamHubei$mer)
+```
+
+```{r covidGamCoefTable}
+knitr::kable(cbind(summary(gamItaly$mer)$coef[,1:2], summary(gamHubei$mer)$coef[,1:2]), digits=3)
+```
+
+```{r plotCovidGam, fig.cap='Predicted cases', fig.subcap = rep(c('Italy','Hubei'), each=2), out.width=Pmisc::out.width(0.48), fig.ncol=2, tidy=FALSE}
+toPredict = data.frame(time = seq(as.Date('2020/1/1'), as.Date('2020/4/10'), by='1 day'))
+toPredict$timeInt = as.numeric(toPredict$time)
+toPredict$weekday = 'Fri'
+Stime = pretty(toPredict$time)
+matplot(toPredict$time,
+	exp(do.call(cbind, mgcv::predict.gam(gamItaly$gam, toPredict, se.fit=TRUE)) %*% Pmisc::ciMat()),
+	col='black', lty=c(1,2,2), type='l', xaxt='n', xlab='', ylab='count', ylim = c(0.5, 5000),
+	xlim = as.Date(c('2020/2/20', '2020/4/5')))
+axis(1, as.numeric(Stime), format(Stime, '%d %b'))
+points(x$Italy[,c('time','deaths')],  col='red')
+matplot(toPredict$time,
+	exp(do.call(cbind, mgcv::predict.gam(gamItaly$gam, toPredict, se.fit=TRUE)) %*% Pmisc::ciMat()),
+	col='black', lty=c(1,2,2), type='l', xaxt='n', xlab='', ylab='count', ylim = c(0.5, 5000),
+	xlim = as.Date(c('2020/2/20', '2020/4/5')), log='y')
+axis(1, as.numeric(Stime), format(Stime, '%d %b'))
+points(x$Italy[,c('time','deaths')],  col='red')
+
+matplot(toPredict$time,
+	exp(do.call(cbind, mgcv::predict.gam(gamHubei$gam, toPredict, se.fit=TRUE)) %*% Pmisc::ciMat()),
+	col='black', lty=c(1,2,2), type='l', xaxt='n', xlab='', ylab='count',
+		xlim = as.Date(c('2020/1/20', '2020/4/5')))
+
+axis(1, as.numeric(Stime), format(Stime, '%d %b'))
+points(x$Hubei[,c('time','deaths')],  col='red')
+matplot(toPredict$time,
+	exp(do.call(cbind, mgcv::predict.gam(gamHubei$gam, toPredict, se.fit=TRUE)) %*% Pmisc::ciMat()),
+	col='black', lty=c(1,2,2), type='l', xaxt='n', xlab='', ylab='count',
+		xlim = as.Date(c('2020/1/20', '2020/4/5')), log='y', ylim =c(0.5, 200))
+
+axis(1, as.numeric(Stime), format(Stime, '%d %b'))
+points(x$Hubei[,c('time','deaths')],  col='red')
+```
+
+
+# Brief Analysis
+Firstly, we can conclude (from figure 5) that we are reasonably confident that the number of deaths from COVID-19 in Italy is in an increasing trend from early March to 23 March (last date of our collected data). We are also rather confident that this increasing trend is going to maintain, perhaps even more sharply so, going into the month of April. But there is some degree of uncertainty as to how fast the increase of deaths will be, but we are very confident that number of deaths will be increasing. For Hubei, however, we have observed with reasonable certainty that there is also a sharp increasing trend of deaths from early Feburary to late Feburary, with a small peak (of number of deaths) at around mid-Feburary, and that the number of deaths have started to decrease consistently until March 23. However, we are less certain that the decreasing trend for Hubei will continue going into April (i.e., there is still a lot room for sudden increases/decreases of death) and this is mainly due to the lack of data collected. Also, we can conclude with reasonabe certainity that days in the week doesn't seem to have a strong effect (if any at all) on the number of deaths for both Italy and Hubei.
+
+
+# Likelihood ratio tests (with boundary corrections) for various models
+```{r hubeiModels, cache=FALSE, dev=NULL, fig.align=NULL, out.width=NULL, warning=FALSE, tidy=FALSE}
+Hubei2 = gamm4::gamm4(deaths ~ 1 + s(timeInt, k=100), random = ~(1|timeIid),
+	data=x$Hubei, family=poisson(link='log'), REML=FALSE)
+Hubei3 = mgcv::gam(deaths ~ weekday + s(timeInt, k=100),
+	data=x$Hubei, family=poisson(link='log'), method='ML')
+Hubei4 = lme4::glmer(deaths ~ weekday + timeInt + (1|timeIid),
+	data=x$Hubei, family=poisson(link='log'))
+```
+
+# LRT for significance of fixed effect of weekday
+```{r, warnings=FALSE}
+lmtest::lrtest(Hubei2$mer, gamHubei$mer)
+```
+# LRT for significance of random effect of timeIid, uses boundary correction
+```{r, warnings=FALSE}
+nadiv::LRTest(logLik(gamHubei$mer),logLik(Hubei3), boundaryCorrect=TRUE)
+```
+
+# LRT for significance of smoothing function, uses boundary correction
+```{r, warnings=FALSE}
+nadiv::LRTest(logLik(gamHubei$mer),logLik(Hubei4), boundaryCorrect=TRUE)
+```
+
+
+
