@@ -1,0 +1,78 @@
+---
+title: "Generalized Linear Mixed Model on US smoking teenagers"
+author: "Timothy Lee"
+date: "11/04/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Context
+Data from the 2014 American National Youth Tobacco Survey is available on `http://pbrown.ca/teaching/303/data`, where there is an R version of the 2014 dataset `smoke.RData`, a pdf documentation file `2014-Codebook.pdf`, and the code used to create the R version of the data `smokingData.R`. We aim to investigate the hypothesis that state-level differences in chewing tobacco usage amongst high school students are much larger than differences between schools within a state. In other words, if one was interested in identifying locations with many tobacco chewers (in order to sell chewing tobacco to children, or if one prefer to implement programs to reduce tobacco chewing), would it be important to find individual schools with high chewing rates or would  targeting those states where chewing is most common be sufficient? 
+
+
+```{r}
+smokeFile = "smokeDownload.RData"
+if (!file.exists(smokeFile)) {
+  download.file("http://pbrown.ca/teaching/303/data/smoke.RData",smokeFile)
+}
+(load(smokeFile))
+```
+The smoke object is a `data.frame` containing the data, the `smokeFormats` gives some explanation of the variables. The `colName` and `label` columns of smokeFormats contain variable names in smoke and descriptions respectively. The model and set of results is shown below.
+
+```{r, warning=FALSE, cache=TRUE}
+smokeFormats[smokeFormats[, "colName"] == "chewing_tobacco_snuff_or",
+c("colName", "label")]
+
+# get rid of 9, 10 year olds and missing age and race
+smokeSub = smoke[which(smoke$Age > 10 & !is.na(smoke$Race)),]
+smokeSub$ageC = smokeSub$Age - 16
+library("glmmTMB")
+smokeModelT = glmmTMB(chewing_tobacco_snuff_or ~ ageC * Sex +
+RuralUrban + Race + (1 | state/school), data = smokeSub,
+family = binomial(link = "logit"))
+
+knitr::kable(summary(smokeModelT)$coef$cond, digits = 2)
+Pmisc::coefTable(smokeModelT)
+```
+
+## Plots of both `state` level and `school within state` level random effects
+```{r}
+Pmisc::ranefPlot(smokeModelT, grpvar = "state", level = 0.5,
+maxNames = 12)
+Pmisc::ranefPlot(smokeModelT, grpvar = "school:state", level = 0.5,
+maxNames = 12, xlim = c(-1, 2.2))
+```
+
+## Statistical Model of `smokeModelT`
+$$
+\begin{aligned}
+Y_{ijk} &\sim Bernoulli(\rho_{ijk}) \\
+logit(\rho_{ijk}) &= X_{ij}\beta + A_i + B_{ij} \\
+A_i &\sim N(0, \sigma_{A}^2) \\
+B_{ij} &\sim N(0, \sigma_{B}^2) 
+\end{aligned}
+$$
+, where $\rho_{ijk}$ is the predicted (binary) response for the $k$th American youth from the $j$th school of the $i$th state.  
+
+## Model Choice
+The difference between this GLMM and GLM is that this model accounts for the fact that although the individual subjects (American youth) between different schools are considered as independendent, the observations of these subjects within the groups of individual schools within states are dependent (i.e., there is a school-level affect on a student's test scores). GLM doesn't account for this potential dependent relationship (hence there will be no random effect added to the model).
+
+Hence, a `logit` link is more appropriate as we are now working with a bernoulli distribution (of response variables) for each observation, i.e., our responses are now binary responses of the youth having chewed tobacco, snuff, or dip (which is modelled by either 0 or 1, representing yes or no). Hence, the `logit` function captures this notion of our response variable better than a linear mixed model (which only works with a continous response variable).
+
+
+## Conclusions
+Based on the summary table and plots, we can say that our data and results are not consistent/supporting the hypothesis that "state-level differences in chewing tobacco usage amongst high school students are much larger than differences between schools within a state", since more of the variation of the response is explained by school differences within states rather than state-level differences. In other words, I think it is more important to find individual schools with high chewing rates rather than targeting those states where chewing is most common.  
+
+This conclusion could be seen from the higher standard deviation from table 3 of schools nested within states which has a point estimate of s.d. 0.75 or a point estimate of a variance of 0.5625, while the point estimate of the standard deviation for states effect only is only 0.31 or a point estimate of the variance of 0.0961. This means that more variation is explained by individual schools nested within states. However, we could see that the 2 CI does indeed overlap a little, however both end points or range for the schools nested within states effect are larger than that of just states. Hence, I am not so worried about this overlap (perhaps due to limited sample sizes), but there might still be a (small) chance that there is indeed no difference between state-level and school within state-level differences. In conclusion, if I have to choose one, I will still choose the program that targets individual schools with high chewing rates (within states) as it has a higher point estimate for the variation explained. 
+
+
+
+
+
+
