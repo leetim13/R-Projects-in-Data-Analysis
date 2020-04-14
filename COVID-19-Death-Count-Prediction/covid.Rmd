@@ -69,7 +69,7 @@ covid_data <- read_csv("covid_data.csv")
 ```
 
 # Plot over time
-```{r, out.width= Pmisc::out.width(0.9), fig.height=6, fig.width=6}
+```{r, out.width= Pmisc::out.width(0.45), fig.height=6, fig.width=6}
 covid_data %>% 
   filter(country_region %in% c('Hubei','Italy','Iran','South Korea','USA')) %>% 
   na.omit() %>% 
@@ -80,7 +80,7 @@ covid_data %>%
 ```
 
 # Plot from initial death in region
-```{r, out.width= Pmisc::out.width(0.9), fig.height=6, fig.width=6}
+```{r, out.width= Pmisc::out.width(0.45), fig.height=6, fig.width=6}
 covid_data %>% 
   filter(country_region %in% c('Hubei','Italy','Iran','South Korea','USA')) %>% 
   na.omit() %>% 
@@ -91,7 +91,7 @@ covid_data %>%
 
 Fit a GAM with `dead` as the response a smooth on `timeInt` and `country_region` as covariate. In the smooth, use `pc=0`, which indicates a *point constraint*. The smooth will pass through 0 at this point. `timeInt` indicates time since the first death, so the line should predict no deaths before any deaths occured.
 
-```{r}
+```{r, cache=TRUE}
 resGam= mgcv::gam(
   dead ~ s(timeInt, pc=0) + country_region, 
   data=covid_data, 
@@ -99,30 +99,36 @@ resGam= mgcv::gam(
 ```
 
 Summary Tables
-```{r,out.width="100%"}
+```{r,out.width= Pmisc::out.width(0.45), cache=TRUE}
 summary(resGam)
 coef(resGam)
 plot(resGam)
 ```
 
 Fit and plot two more GAMs with the same model but with `k = 50` and `k = 20`. Run `gam.check()` for both. Since a higher `k` could lead to overfitting.
-```{r,out.width="100%"}
+```{r,out.width=Pmisc::out.width(0.45)}
+par(mar=c(3,3,3,3))	
 resGam3= mgcv::gam(
   dead ~ s(timeInt, k=50, pc=0) + country_region, data=covid_data, 
   family=poisson(link='log'), method='ML')
 plot(resGam3)
-gam.check(resGam3)
+gam.check(resGam3, cex.main=1)
+vis.gam(resGam3,theta = 20, phi = 20,
+        ticktype = "detailed", color = "topo", main = "resGam3 3D-visualization")
+
 
 resGam4 = mgcv::gam(
   dead ~ s(timeInt, k=20, pc=0) + country_region, data=covid_data, 
   family=poisson(link='log'), method='ML')
 plot(resGam4)
 gam.check(resGam4)
+vis.gam(resGam4,theta = 20, phi = 20,
+        ticktype = "detailed", color = "terrain", main = "resGam4 3D-visualization")
 ```
 
 Create a new variable in dataset called `timeIntInd`, which is is just a copy of `timeInt`. Use `gamm4()` to fit the same model as before but additionally with `country_region` nested within `timeIntInd` (since data within countries is likely to highly correlated, so we need to fit a random effect for country).
 
-```{r, cache=TRUE,out.width= Pmisc::out.width(0.9), fig.height=5, fig.width=5}
+```{r, cache=TRUE,out.width= Pmisc::out.width(0.45)}
 covid_data$timeIntInd = covid_data$timeInt
 resGammInd = gamm4::gamm4(
   dead ~ country_region + 
@@ -135,7 +141,7 @@ summary(resGammInd$mer)
 summary(resGammInd$gam)
 ```
 
-```{r,out.width="100%"}
+```{r, out.width=Pmisc::out.width(1), cache=TRUE}
 covid_data_2 <- expand_grid(covid_data$timeInt, covid_data$country_region) %>% 
   as_tibble() %>% 
   rename(timeInt = 1, country_region = 2) %>% 
@@ -156,7 +162,7 @@ covid_data_2 %>%
 
 
 Fit this model with a random slope for time.
-```{r, cache=TRUE, out.width="100%"}
+```{r, cache=TRUE , out.width=Pmisc::out.width(0.45)}
 covid_data$timeSlope = covid_data$timeInt/100
 
 resGammSlope = gamm4::gamm4(
@@ -220,7 +226,7 @@ x$Italy$timeIid = x$Italy$timeInt
 x$Hubei$timeIid = x$Hubei$time
 ```
 
-```{r covidGam, cache=FALSE, dev=NULL, fig.align=NULL, out.width=NULL, tidy=FALSE}
+```{r covidGam, cache=TRUE, dev=NULL, fig.align=NULL, out.width=NULL, tidy=FALSE}
 gamItaly = gamm4::gamm4(deaths ~ weekday + s(timeInt, k=40), random = ~(1|timeIid),
 	data=x$Italy, family=poisson(link='log'))
 gamHubei = gamm4::gamm4(deaths ~ weekday + s(timeInt, k=100), random = ~(1|timeIid),
@@ -260,12 +266,12 @@ $X_{t}$ are our $weekday$ covariates (Monday, Tuesday, ..., Sunday with Friday a
 
 $Z_{t}$ is the overdispersion or the independent random effect (random intercept) for each time $t$ ($timeIid$).
 
-```{r covidGamTable}
+```{r covidGamTable, cache=TRUE}
 lme4::VarCorr(gamItaly$mer)
 lme4::VarCorr(gamHubei$mer)
 ```
 
-```{r covidGamCoefTable}
+```{r covidGamCoefTable, cache=TRUE}
 knitr::kable(cbind(summary(gamItaly$mer)$coef[,1:2], summary(gamHubei$mer)$coef[,1:2]), digits=3)
 ```
 
